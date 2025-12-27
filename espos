@@ -242,7 +242,7 @@ int loadScore(int game) {
 
 // ============ HOME SCREEN ============
 void showHome() {
-  String apps[] = {"Calculator", "WiFi", "Messenger", "Games", "Browser", "SysInfo", "customApp" "Exit"};
+  String apps[] = {"Calculator", "WiFi", "Messenger", "Games", "Browser", "SysInfo", "customApp", "Exit"};
  
   #ifdef USE_OLED
     Display::clear();
@@ -264,7 +264,7 @@ void showHome() {
     }
     Display::show();
   #else
-    Display::menu("MAIN MENU", apps, 7, menuSelection);
+    Display::menu("MAIN MENU", apps, 8, menuSelection);
   #endif
 }
 
