@@ -1,0 +1,1105 @@
+/*
+* ESP-OS v2.0 with GUI Support
+*
+* DISPLAY MODES:
+* 1. Uncomment USE_OLED for OLED display (128x64, I2C, SSD1306)
+* 2. Uncomment USE_SERIAL for Serial Monitor only
+*
+* OLED Wiring (if used):
+* - SDA -> GPIO4 (D2)
+* - SCL -> GPIO5 (D1)
+* - VCC -> 3.3V
+* - GND -> GND
+*
+* Install these libraries for OLED:
+* - Adafruit GFX Library
+* - Adafruit SSD1306
+*/
+
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <WiFiUdp.h>
+#include <EEPROM.h>
+
+// ============ CHOOSE YOUR DISPLAY MODE ============
+//#define USE_OLED        // Uncomment for OLED display
+#define USE_SERIAL      // Uncomment for Serial Monitor
+
+#ifdef USE_OLED
+  #include <Wire.h>
+  #include <Adafruit_GFX.h>
+  #include <Adafruit_SSD1306.h>
+ 
+  #define SCREEN_WIDTH 128
+  #define SCREEN_HEIGHT 64
+  #define OLED_RESET -1
+  Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+#endif
+
+// ============ CONFIGURATION ============
+#define VERSION "ESP-OS v2.0"
+#define UDP_PORT 4210
+#define MAX_MESSAGE_LENGTH 256
+#define EEPROM_SIZE 512
+#define MAX_CONTACTS 5
+
+#define ADDR_WIFI_CONFIGURED 0
+#define ADDR_SSID 1
+#define ADDR_PASSWORD 33
+#define ADDR_HIGH_SCORE_FLAPPY 65
+#define ADDR_HIGH_SCORE_MARIO 69
+#define ADDR_HIGH_SCORE_FIGHTER 73
+#define ADDR_CONTACTS_START 77
+
+// ============ GLOBAL VARIABLES ============
+WiFiUDP udp;
+String deviceName = "ESP" + String(ESP.getChipId(), HEX);
+String currentApp = "home";
+int menuSelection = 0;
+bool wifiConnected = false;
+
+String calcDisplay = "0";
+double calcMemory = 0;
+char lastOp = '=';
+
+struct Contact {
+  char name[16];
+  IPAddress ip;
+  unsigned long lastSeen;
+} contacts[MAX_CONTACTS];
+
+int contactCount = 0;
+String messageHistory[20];
+int messageHistoryCount = 0;
+
+int highScoreFlappy = 0;
+int highScoreMario = 0;
+int highScoreFighter = 0;
+
+String browserHistory[5];
+int browserHistoryCount = 0;
+
+// ============ DISPLAY CLASS ============
+class Display {
+public:
+  static void init() {
+    Serial.begin(115200);
+    delay(100);
+   
+    #ifdef USE_OLED
+      if(!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        Serial.println("OLED init failed!");
+        while(1);
+      }
+      oled.clearDisplay();
+      oled.setTextSize(1);
+      oled.setTextColor(SSD1306_WHITE);
+      oled.display();
+    #endif
+  }
+ 
+  static void clear() {
+    #ifdef USE_OLED
+      oled.clearDisplay();
+    #else
+      for(int i=0; i<10; i++) Serial.println();
+      Serial.println("================================");
+    #endif
+  }
+ 
+  static void show() {
+    #ifdef USE_OLED
+      oled.display();
+    #endif
+  }
+ 
+  static void print(int x, int y, String text, int size = 1) {
+    #ifdef USE_OLED
+      oled.setTextSize(size);
+      oled.setCursor(x, y);
+      oled.print(text);
+    #else
+      Serial.println(text);
+    #endif
+  }
+ 
+  static void printCenter(int y, String text) {
+    #ifdef USE_OLED
+      oled.setTextSize(1);
+      int16_t x1, y1;
+      uint16_t w, h;
+      oled.getTextBounds(text, 0, 0, &x1, &y1, &w, &h);
+      oled.setCursor((SCREEN_WIDTH - w) / 2, y);
+      oled.print(text);
+    #else
+      Serial.println(text);
+    #endif
+  }
+ 
+  static void rect(int x, int y, int w, int h, bool fill = false) {
+    #ifdef USE_OLED
+      if(fill) oled.fillRect(x, y, w, h, SSD1306_WHITE);
+      else oled.drawRect(x, y, w, h, SSD1306_WHITE);
+    #endif
+  }
+ 
+  static void line(int x1, int y1, int x2, int y2) {
+    #ifdef USE_OLED
+      oled.drawLine(x1, y1, x2, y2, SSD1306_WHITE);
+    #endif
+  }
+ 
+  static void circle(int x, int y, int r, bool fill = false) {
+    #ifdef USE_OLED
+      if(fill) oled.fillCircle(x, y, r, SSD1306_WHITE);
+      else oled.drawCircle(x, y, r, SSD1306_WHITE);
+    #endif
+  }
+ 
+  static void pixel(int x, int y) {
+    #ifdef USE_OLED
+      oled.drawPixel(x, y, SSD1306_WHITE);
+    #endif
+  }
+ 
+  static void progressBar(int x, int y, int w, int h, int val, int max) {
+    #ifdef USE_OLED
+      oled.drawRect(x, y, w, h, SSD1306_WHITE);
+      int fill = (w - 2) * val / max;
+      oled.fillRect(x + 1, y + 1, fill, h - 2, SSD1306_WHITE);
+    #endif
+  }
+ 
+  static void menu(String title, String items[], int cnt, int sel) {
+    clear();
+    printCenter(0, title);
+    line(0, 10, 128, 10);
+   
+    #ifdef USE_OLED
+      for(int i = 0; i < min(cnt, 5); i++) {
+        int y = 14 + (i * 10);
+        if(i == sel) {
+          rect(0, y - 1, 128, 10, true);
+          oled.setTextColor(SSD1306_BLACK);
+          print(4, y, items[i]);
+          oled.setTextColor(SSD1306_WHITE);
+        } else {
+          print(4, y, items[i]);
+        }
+      }
+    #else
+      for(int i = 0; i < cnt; i++) {
+        if(i == sel) Serial.println("> " + String(i+1) + ". " + items[i]);
+        else Serial.println("  " + String(i+1) + ". " + items[i]);
+      }
+    #endif
+    show();
+  }
+};
+
+// ============ EEPROM FUNCTIONS ============
+void saveWiFi(String ssid, String pass) {
+  EEPROM.write(ADDR_WIFI_CONFIGURED, 1);
+  for(int i = 0; i < 32; i++) {
+    EEPROM.write(ADDR_SSID + i, i < ssid.length() ? ssid[i] : 0);
+    EEPROM.write(ADDR_PASSWORD + i, i < pass.length() ? pass[i] : 0);
+  }
+  EEPROM.commit();
+}
+
+bool loadWiFi(String &ssid, String &pass) {
+  if(EEPROM.read(ADDR_WIFI_CONFIGURED) != 1) return false;
+ 
+  char s[33] = {0}, p[33] = {0};
+  for(int i = 0; i < 32; i++) {
+    s[i] = EEPROM.read(ADDR_SSID + i);
+    p[i] = EEPROM.read(ADDR_PASSWORD + i);
+  }
+  ssid = String(s);
+  pass = String(p);
+  return ssid.length() > 0;
+}
+
+void saveScore(int game, int score) {
+  int addr = (game == 0) ? ADDR_HIGH_SCORE_FLAPPY :
+             (game == 1) ? ADDR_HIGH_SCORE_MARIO : ADDR_HIGH_SCORE_FIGHTER;
+  for(int i = 0; i < 4; i++) {
+    EEPROM.write(addr + i, (score >> (8 * (3 - i))) & 0xFF);
+  }
+  EEPROM.commit();
+}
+
+int loadScore(int game) {
+  int addr = (game == 0) ? ADDR_HIGH_SCORE_FLAPPY :
+             (game == 1) ? ADDR_HIGH_SCORE_MARIO : ADDR_HIGH_SCORE_FIGHTER;
+  int score = 0;
+  for(int i = 0; i < 4; i++) {
+    score = (score << 8) | EEPROM.read(addr + i);
+  }
+  return score;
+}
+
+// ============ HOME SCREEN ============
+void showHome() {
+  String apps[] = {"Calculator", "WiFi", "Messenger", "Games", "Browser", "SysInfo", "Exit"};
+ 
+  #ifdef USE_OLED
+    Display::clear();
+    Display::printCenter(0, "ESP-OS v2.0");
+    if(wifiConnected) Display::circle(120, 4, 3, true);
+    Display::line(0, 10, 128, 10);
+    Display::print(0, 12, deviceName.substring(0, 18));
+   
+    for(int i = 0; i < 4; i++) {
+      int y = 24 + (i * 10);
+      if(i == menuSelection) {
+        Display::rect(0, y - 1, 128, 10, true);
+        oled.setTextColor(SSD1306_BLACK);
+        Display::print(4, y, apps[i]);
+        oled.setTextColor(SSD1306_WHITE);
+      } else {
+        Display::print(4, y, apps[i]);
+      }
+    }
+    Display::show();
+  #else
+    Display::menu("MAIN MENU", apps, 7, menuSelection);
+  #endif
+}
+
+// ============ CALCULATOR ============
+void calculatorApp() {
+  Display::clear();
+  Display::print(0, 0, "CALCULATOR");
+  Display::print(0, 0, "Ops: +,-,*,/,^,s(sqrt)");
+  Display::print(0, 0, "Func: sin,cos,tan,log");
+  Display::print(0, 0, "Mem: m,r,c(clr),b(back)");
+  Display::print(0, 0, "Display: " + calcDisplay);
+  Serial.print("> ");
+ 
+  String buf = "";
+  while(true) {
+    if(Serial.available()) {
+      char in = Serial.read();
+     
+      if(in == '\n' || in == '\r') {
+        if(buf == "b") { currentApp = "home"; return; }
+        if(buf == "c") { calcDisplay = "0"; calcMemory = 0; lastOp = '='; }
+        else if(buf.startsWith("sin")) calcDisplay = String(sin(calcDisplay.toDouble() * PI / 180));
+        else if(buf.startsWith("cos")) calcDisplay = String(cos(calcDisplay.toDouble() * PI / 180));
+        else if(buf.startsWith("tan")) calcDisplay = String(tan(calcDisplay.toDouble() * PI / 180));
+        else if(buf.startsWith("log")) calcDisplay = String(log10(calcDisplay.toDouble()));
+        else if(buf == "s") calcDisplay = String(sqrt(calcDisplay.toDouble()));
+        else if(buf.length() > 0) calcDisplay = buf;
+       
+        buf = "";
+        Display::clear();
+        Display::print(0, 20, calcDisplay);
+        Display::show();
+        Serial.println("= " + calcDisplay);
+        Serial.print("> ");
+        continue;
+      }
+     
+      if(in == '+' || in == '-' || in == '*' || in == '/') {
+        double cur = calcDisplay.toDouble();
+        if(lastOp == '+') calcMemory += cur;
+        else if(lastOp == '-') calcMemory -= cur;
+        else if(lastOp == '*') calcMemory *= cur;
+        else if(lastOp == '/') calcMemory /= cur;
+        else calcMemory = cur;
+       
+        lastOp = in;
+        calcDisplay = String(calcMemory);
+        Serial.println("= " + calcDisplay);
+        calcDisplay = "0";
+        Serial.print("> ");
+      }
+      else if(in == '=') {
+        double cur = calcDisplay.toDouble();
+        if(lastOp == '+') calcMemory += cur;
+        else if(lastOp == '-') calcMemory -= cur;
+        else if(lastOp == '*') calcMemory *= cur;
+        else if(lastOp == '/') calcMemory /= cur;
+       
+        calcDisplay = String(calcMemory);
+        Serial.println("= " + calcDisplay);
+        lastOp = '=';
+        calcMemory = 0;
+        Serial.print("> ");
+      }
+      else {
+        buf += in;
+        Serial.print(in);
+      }
+    }
+    yield();
+  }
+}
+
+// ============ WIFI ============
+void wifiApp() {
+  Display::clear();
+ 
+  #ifdef USE_OLED
+    Display::printCenter(0, "WiFi Settings");
+    Display::line(0, 10, 128, 10);
+    if(wifiConnected) {
+      Display::print(0, 14, WiFi.SSID().substring(0, 20));
+      Display::print(0, 24, WiFi.localIP().toString());
+      Display::print(0, 34, "Signal:" + String(WiFi.RSSI()));
+      Display::print(0, 54, "Use serial menu");
+    } else {
+      Display::printCenter(28, "Not connected");
+      Display::print(0, 54, "Use serial setup");
+    }
+    Display::show();
+  #endif
+ 
+  Serial.println("WiFi Settings");
+  if(wifiConnected) {
+    Serial.println("Connected: " + WiFi.SSID());
+    Serial.println("IP: " + WiFi.localIP().toString());
+    Serial.println("1.Disconnect 2.New 3.Forget 4.Back");
+    Serial.print("> ");
+   
+    while(!Serial.available()) yield();
+    char c = Serial.read();
+   
+    if(c == '1') { WiFi.disconnect(); wifiConnected = false; }
+    else if(c == '3') { EEPROM.write(ADDR_WIFI_CONFIGURED, 0); EEPROM.commit(); }
+    else if(c != '2') { currentApp = "home"; return; }
+  }
+ 
+  // Ask for SSID first
+  String ssid = "";
+  bool ssidConfirmed = false;
+  while(!ssidConfirmed) {
+    Serial.println("\nEnter SSID (or 'cancel' to abort):");
+    Serial.print("> ");
+    while(!Serial.available()) yield();
+    ssid = Serial.readStringUntil('\n');
+    ssid.trim();
+    
+    if(ssid.length() == 0) continue;
+    
+    if(ssid.equalsIgnoreCase("cancel")) {
+      currentApp = "home";
+      return;
+    }
+    
+    Serial.println("SSID: \"" + ssid + "\"");
+    Serial.println("Confirm? (y/n/cancel):");
+    Serial.print("> ");
+    
+    while(!Serial.available()) yield();
+    char confirm = Serial.read();
+    Serial.readStringUntil('\n'); // Clear any remaining input
+    
+    if(confirm == 'y' || confirm == 'Y') {
+      ssidConfirmed = true;
+    } else if(confirm == 'c' || confirm == 'C') {
+      currentApp = "home";
+      return;
+    }
+    // If 'n', loop continues to ask for SSID again
+  }
+ 
+  // Ask for password
+  String pass = "";
+  bool passConfirmed = false;
+  while(!passConfirmed) {
+    Serial.println("\nEnter Password (or 'skip' for open network):");
+    Serial.print("> ");
+    while(!Serial.available()) yield();
+    pass = Serial.readStringUntil('\n');
+    pass.trim();
+    
+    Serial.println("Password: " + String(pass.length() > 0 ? "*****" : "[empty]"));
+    Serial.println("Confirm? (y/n/cancel):");
+    Serial.print("> ");
+    
+    while(!Serial.available()) yield();
+    char confirm = Serial.read();
+    Serial.readStringUntil('\n'); // Clear any remaining input
+    
+    if(confirm == 'y' || confirm == 'Y') {
+      passConfirmed = true;
+    } else if(confirm == 'c' || confirm == 'C') {
+      currentApp = "home";
+      return;
+    }
+    // If 'n', loop continues to ask for password again
+  }
+  
+  // Final confirmation with both SSID and password
+  Serial.println("\n--- WiFi Configuration ---");
+  Serial.println("SSID: \"" + ssid + "\"");
+  Serial.println("Password: " + String(pass.length() > 0 ? "*****" : "[open network]"));
+  Serial.println("Connect with these settings? (y/n):");
+  Serial.print("> ");
+  
+  while(!Serial.available()) yield();
+  char finalConfirm = Serial.read();
+  Serial.readStringUntil('\n'); // Clear any remaining input
+  
+  if(finalConfirm != 'y' && finalConfirm != 'Y') {
+    Serial.println("Cancelled.");
+    currentApp = "home";
+    return;
+  }
+ 
+  Serial.println("\nConnecting...");
+  WiFi.begin(ssid.c_str(), pass.c_str());
+ 
+  int tries = 0;
+  while(WiFi.status() != WL_CONNECTED && tries < 30) {
+    delay(500);
+    Serial.print(".");
+    tries++;
+  }
+ 
+  if(WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    udp.begin(UDP_PORT);
+    Serial.println("\nConnected! IP: " + WiFi.localIP().toString());
+    
+    // Ask about saving to EEPROM
+    Serial.println("Save to memory? (y/n):");
+    Serial.print("> ");
+    while(!Serial.available()) yield();
+    char save = Serial.read();
+    Serial.readStringUntil('\n'); // Clear any remaining input
+    
+    if(save == 'y' || save == 'Y') {
+      saveWiFi(ssid, pass);
+    }
+  } else {
+    Serial.println("\nFailed to connect!");
+  }
+ 
+  delay(3000);
+  currentApp = "home";
+}
+
+// ============ FLAPPY BIRD ============
+void flappyBird() {
+  int birdY = 5, vel = 0, obsX = 25, gapY = 4, score = 0;
+  bool over = false;
+  unsigned long last = millis();
+ 
+  while(!over) {
+    if(millis() - last > 150) {
+      vel++;
+      birdY += vel;
+      if(birdY < 0) birdY = 0;
+      if(birdY >= 10) over = true;
+     
+      obsX--;
+      if(obsX < 0) { obsX = 25; gapY = random(2, 7); score++; }
+     
+      if(obsX >= 3 && obsX <= 5 && (birdY < gapY || birdY >= gapY + 4)) over = true;
+     
+      #ifdef USE_OLED
+        Display::clear();
+        for(int y = 0; y < 10; y++) {
+          for(int x = 0; x < 25; x++) {
+            if(x == 4 && y == birdY) Display::pixel(x * 5, y * 6);
+            else if(x == obsX && (y < gapY || y >= gapY + 4)) Display::rect(x * 5, y * 6, 4, 5, true);
+          }
+        }
+        Display::print(0, 0, "Score:" + String(score));
+        Display::show();
+      #else
+        Serial.println("\n");
+        for(int y = 0; y < 10; y++) {
+          for(int x = 0; x < 30; x++) {
+            if(x == 4 && y == birdY) Serial.print(">");
+            else if(x == obsX && (y < gapY || y >= gapY + 4)) Serial.print("#");
+            else Serial.print(" ");
+          }
+          Serial.println("|");
+        }
+        Serial.println("Score: " + String(score) + " High: " + String(highScoreFlappy));
+      #endif
+     
+      last = millis();
+    }
+   
+    if(Serial.available()) {
+      char c = Serial.read();
+      if(c == ' ') vel = -3;
+      if(c == 'q') return;
+    }
+    yield();
+  }
+ 
+  if(score > highScoreFlappy) { highScoreFlappy = score; saveScore(0, score); }
+  Serial.println("\nGame Over! Score: " + String(score));
+  delay(3000);
+}
+
+// ============ PLATFORM RUNNER ============
+void marioGame() {
+  int pX = 5, pY = 7, velY = 0, worldX = 0, score = 0;
+  bool ground = true, over = false;
+  unsigned long last = millis();
+  int platforms[] = {7, 7, 5, 7, 4, 7, 6, 7, 7, 5};
+ 
+  while(!over) {
+    if(millis() - last > 120) {
+      if(!ground) { velY++; pY += velY; }
+     
+      ground = false;
+      int plat = platforms[(worldX / 5) % 10];
+      if(pY >= plat && pY < plat + 1) { pY = plat; velY = 0; ground = true; }
+     
+      if(pY > 9) over = true;
+      worldX++;
+      score++;
+     
+      #ifdef USE_OLED
+        Display::clear();
+        for(int y = 0; y < 10; y++) {
+          for(int x = 0; x < 25; x++) {
+            if(x == pX && y == pY) Display::pixel(x * 5, y * 6);
+            else {
+              int wx = worldX + x;
+              int ph = platforms[(wx / 5) % 10];
+              if(y == ph && wx % 5 < 3) Display::pixel(x * 5, y * 6);
+            }
+          }
+        }
+        Display::print(0, 0, "Score:" + String(score));
+        Display::show();
+      #else
+        Serial.println("\n");
+        for(int y = 0; y < 10; y++) {
+          for(int x = 0; x < 30; x++) {
+            if(x == pX && y == pY) Serial.print("@");
+            else {
+              int wx = worldX + x;
+              int ph = platforms[(wx / 5) % 10];
+              if(y == ph && wx % 5 < 3) Serial.print("=");
+              else Serial.print(" ");
+            }
+          }
+          Serial.println("|");
+        }
+        Serial.println("Score: " + String(score) + " High: " + String(highScoreMario));
+      #endif
+     
+      last = millis();
+    }
+   
+    if(Serial.available()) {
+      char c = Serial.read();
+      if(c == ' ' && ground) { velY = -3; ground = false; }
+      if(c == 'q') return;
+    }
+    yield();
+  }
+ 
+  if(score > highScoreMario) { highScoreMario = score; saveScore(1, score); }
+  Serial.println("\nGame Over! Score: " + String(score));
+  delay(3000);
+}
+
+// ============ FIGHTER ============
+void fighterGame() {
+  int pH = 100, eH = 100, wins = 0;
+ 
+  while(wins < 3) {
+    Display::clear();
+    Display::print(0, 0, "FIGHTER - Round " + String(wins + 1));
+    Display::print(0, 10, "Player: " + String(pH) + "/100");
+    Display::print(0, 20, "Enemy: " + String(eH) + "/100");
+    Display::print(0, 40, "a:punch s:kick d:block");
+    Display::print(0, 50, "SPACE:special q:quit");
+    Display::show();
+   
+    if(Serial.available()) {
+      char c = Serial.read();
+     
+      if(c == 'q') return;
+      else if(c == 'a') { eH -= random(8, 15); Serial.println("You punch!"); }
+      else if(c == 's') { eH -= random(12, 20); Serial.println("You kick!"); }
+      else if(c == ' ') { eH -= random(20, 30); Serial.println("SPECIAL!"); }
+     
+      // Enemy turn
+      int eMove = random(0, 3);
+      if(eMove == 0) { pH -= random(8, 15); Serial.println("Enemy punches!"); }
+      else if(eMove == 1) { pH -= random(12, 20); Serial.println("Enemy kicks!"); }
+      else if(eMove == 2) { pH -= random(20, 30); Serial.println("Enemy special!"); }
+     
+      delay(500);
+    }
+   
+    if(pH <= 0 || eH <= 0) {
+      if(eH <= 0) {
+        wins++;
+        Serial.println("Round won!");
+        pH = 100;
+        eH = 100;
+      } else {
+        Serial.println("You lose! Wins: " + String(wins));
+        if(wins > highScoreFighter) { highScoreFighter = wins; saveScore(2, wins); }
+        delay(3000);
+        return;
+      }
+    }
+   
+    yield();
+  }
+ 
+  Serial.println("Champion! 3 wins!");
+  if(wins > highScoreFighter) { highScoreFighter = wins; saveScore(2, wins); }
+  delay(3000);
+}
+
+// ============ GAME ZONE ============
+void gameZone() {
+  String games[] = {"Flappy Bird", "Platform Runner", "Fighter", "Back"};
+  Display::menu("GAME ZONE", games, 4, 0);
+ 
+  Serial.println("1:Flappy 2:Platform 3:Fighter 4:Back");
+  Serial.print("> ");
+  while(!Serial.available()) yield();
+  char c = Serial.read();
+ 
+  if(c == '1') flappyBird();
+  else if(c == '2') marioGame();
+  else if(c == '3') fighterGame();
+ 
+  currentApp = "home";
+}
+
+// ============ MESSENGER ============
+void updateContact(String name, IPAddress ip) {
+  for(int i = 0; i < contactCount; i++) {
+    if(strcmp(contacts[i].name, name.c_str()) == 0) {
+      contacts[i].lastSeen = millis();
+      contacts[i].ip = ip;
+      return;
+    }
+  }
+ 
+  if(contactCount < MAX_CONTACTS) {
+    name.toCharArray(contacts[contactCount].name, 16);
+    contacts[contactCount].ip = ip;
+    contacts[contactCount].lastSeen = millis();
+    contactCount++;
+  }
+}
+
+void messengerApp() {
+  if(!wifiConnected) {
+    Display::clear();
+    Display::printCenter(28, "WiFi Required!");
+    Display::show();
+    Serial.println("WiFi not connected!");
+    delay(2000);
+    currentApp = "home";
+    return;
+  }
+ 
+  #ifdef USE_OLED
+    Display::clear();
+    Display::printCenter(0, "Messenger");
+    Display::line(0, 10, 128, 10);
+    Display::print(0, 14, "Device: " + deviceName.substring(0, 16));
+    Display::print(0, 24, "Contacts: " + String(contactCount));
+   
+    for(int i = 0; i < min(contactCount, 3); i++) {
+      unsigned long sec = (millis() - contacts[i].lastSeen) / 1000;
+      Display::print(0, 34 + (i * 10), String(contacts[i].name) + " " + String(sec) + "s");
+    }
+   
+    Display::print(0, 54, "Use serial chat");
+    Display::show();
+  #endif
+ 
+  Serial.println("\n=== MESSENGER PRO ===");
+  Serial.println("Device: " + deviceName);
+  Serial.println("Contacts: " + String(contactCount));
+ 
+  for(int i = 0; i < contactCount; i++) {
+    unsigned long sec = (millis() - contacts[i].lastSeen) / 1000;
+    Serial.println(String(i+1) + ". " + String(contacts[i].name) +
+                   " (" + contacts[i].ip.toString() + ") - " + String(sec) + "s ago");
+  }
+ 
+  Serial.println("\nCommands:");
+  Serial.println("@all <message> - Broadcast to all");
+  Serial.println("@<name> <msg>  - Direct message");
+  Serial.println("/history       - View messages");
+  Serial.println("/refresh       - Update contacts");
+  Serial.println("b              - Go back");
+  Serial.println("");
+ 
+  // Announce presence
+  String announcement = "JOIN:" + deviceName;
+  udp.beginPacket(IPAddress(255,255,255,255), UDP_PORT);
+  udp.write(announcement.c_str());
+  udp.endPacket();
+ 
+  unsigned long lastHeartbeat = 0;
+  int msgDisplayCount = 0;
+ 
+  while(true) {
+    // Periodic heartbeat
+    if(millis() - lastHeartbeat > 10000) {
+      udp.beginPacket(IPAddress(255,255,255,255), UDP_PORT);
+      udp.write(announcement.c_str());
+      udp.endPacket();
+      lastHeartbeat = millis();
+    }
+   
+    // Check for incoming messages
+    int packetSize = udp.parsePacket();
+    if(packetSize) {
+      char incomingPacket[MAX_MESSAGE_LENGTH];
+      int len = udp.read(incomingPacket, MAX_MESSAGE_LENGTH);
+      if(len > 0) {
+        incomingPacket[len] = 0;
+        String msg = String(incomingPacket);
+        IPAddress remoteIP = udp.remoteIP();
+       
+        if(msg.startsWith("MSG:")) {
+          String content = msg.substring(4);
+          Serial.println("[RX] " + content);
+         
+          #ifdef USE_OLED
+            Display::clear();
+            Display::printCenter(0, "New Message!");
+            Display::line(0, 10, 128, 10);
+           
+            // Word wrap message
+            int startIdx = max(0, messageHistoryCount - 4);
+            for(int i = startIdx; i < messageHistoryCount && i < startIdx + 4; i++) {
+              String shortMsg = messageHistory[i].substring(0, 21);
+              Display::print(0, 14 + ((i - startIdx) * 10), shortMsg);
+            }
+           
+            Display::show();
+          #endif
+         
+          if(messageHistoryCount < 20) {
+            messageHistory[messageHistoryCount++] = content;
+          } else {
+            // Shift array
+            for(int i = 0; i < 19; i++) {
+              messageHistory[i] = messageHistory[i + 1];
+            }
+            messageHistory[19] = content;
+          }
+        }
+        else if(msg.startsWith("DM:")) {
+          int separatorPos = msg.indexOf(":", 3);
+          String sender = msg.substring(3, separatorPos);
+          String content = msg.substring(separatorPos + 1);
+          Serial.println("[DM from " + sender + "] " + content);
+         
+          #ifdef USE_OLED
+            Display::clear();
+            Display::printCenter(0, "Direct Message");
+            Display::line(0, 10, 128, 10);
+            Display::print(0, 20, "From: " + sender.substring(0, 16));
+            Display::print(0, 35, content.substring(0, 21));
+            Display::show();
+          #endif
+         
+          if(messageHistoryCount < 20) {
+            messageHistory[messageHistoryCount++] = "[DM] " + sender + ": " + content;
+          }
+        }
+        else if(msg.startsWith("JOIN:")) {
+          String name = msg.substring(5);
+          updateContact(name, remoteIP);
+          Serial.println("[+] " + name + " joined/online");
+         
+          #ifdef USE_OLED
+            Display::clear();
+            Display::printCenter(0, "Messenger");
+            Display::line(0, 10, 128, 10);
+            Display::printCenter(28, name + " online!");
+            Display::show();
+            delay(1000);
+          #endif
+        }
+      }
+    }
+   
+    // Check for user input
+    if(Serial.available()) {
+      String input = Serial.readStringUntil('\n');
+      input.trim();
+     
+      if(input == "b") {
+        currentApp = "home";
+        return;
+      }
+      else if(input == "/history") {
+        Serial.println("\n=== MESSAGE HISTORY ===");
+        for(int i = 0; i < messageHistoryCount; i++) {
+          Serial.println(messageHistory[i]);
+        }
+        Serial.println("=======================\n");
+      }
+      else if(input == "/refresh") {
+        Serial.println("Refreshing contacts...");
+        udp.beginPacket(IPAddress(255,255,255,255), UDP_PORT);
+        udp.write(announcement.c_str());
+        udp.endPacket();
+       
+        #ifdef USE_OLED
+          Display::clear();
+          Display::printCenter(28, "Refreshing...");
+          Display::show();
+          delay(1000);
+        #endif
+      }
+      else if(input.startsWith("@all ")) {
+        String message = "MSG:" + deviceName + ": " + input.substring(5);
+        udp.beginPacket(IPAddress(255,255,255,255), UDP_PORT);
+        udp.write(message.c_str());
+        udp.endPacket();
+        Serial.println("[TX to All] " + input.substring(5));
+       
+        #ifdef USE_OLED
+          Display::clear();
+          Display::printCenter(0, "Sent!");
+          Display::line(0, 10, 128, 10);
+          String shortMsg = input.substring(5, min(26, (int)input.length()));
+          Display::printCenter(28, shortMsg);
+          Display::show();
+          delay(1000);
+        #endif
+      }
+      else if(input.startsWith("@")) {
+        int spacePos = input.indexOf(' ');
+        if(spacePos > 0) {
+          String targetName = input.substring(1, spacePos);
+          String message = input.substring(spacePos + 1);
+         
+          // Find contact
+          bool found = false;
+          for(int i = 0; i < contactCount; i++) {
+            if(String(contacts[i].name) == targetName) {
+              String dm = "DM:" + deviceName + ":" + message;
+              udp.beginPacket(contacts[i].ip, UDP_PORT);
+              udp.write(dm.c_str());
+              udp.endPacket();
+              Serial.println("[TX to " + targetName + "] " + message);
+              found = true;
+             
+              #ifdef USE_OLED
+                Display::clear();
+                Display::printCenter(0, "DM Sent!");
+                Display::line(0, 10, 128, 10);
+                Display::print(0, 20, "To: " + targetName);
+                Display::print(0, 35, message.substring(0, 21));
+                Display::show();
+                delay(1000);
+              #endif
+              break;
+            }
+          }
+         
+          if(!found) {
+            Serial.println("[!] Contact not found: " + targetName);
+          }
+        }
+      }
+      else if(input.length() > 0) {
+        String message = "MSG:" + deviceName + ": " + input;
+        udp.beginPacket(IPAddress(255,255,255,255), UDP_PORT);
+        udp.write(message.c_str());
+        udp.endPacket();
+        Serial.println("[TX] " + input);
+       
+        #ifdef USE_OLED
+          Display::clear();
+          Display::printCenter(0, "Sent!");
+          Display::line(0, 10, 128, 10);
+          String shortMsg = input.substring(0, min(21, (int)input.length()));
+          Display::printCenter(28, shortMsg);
+          Display::show();
+          delay(800);
+        #endif
+      }
+     
+      Serial.print("> ");
+    }
+   
+    yield();
+  }
+}
+
+// ============ BROWSER ============
+void browserApp() {
+  if(!wifiConnected) {
+    Serial.println("WiFi required!");
+    delay(2000);
+    currentApp = "home";
+    return;
+  }
+ 
+  Serial.println("BROWSER");
+  Serial.println("Enter search:");
+  Serial.print("> ");
+ 
+  while(!Serial.available()) yield();
+  String search = Serial.readStringUntil('\n');
+  search.trim();
+ 
+  if(search == "b") { currentApp = "home"; return; }
+ 
+  Serial.println("Searching...");
+ 
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+ 
+  String url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + search;
+  url.replace(" ", "_");
+ 
+  http.begin(client, url);
+  int code = http.GET();
+ 
+  if(code == 200) {
+    String data = http.getString();
+   
+    int ts = data.indexOf("\"title\":\"") + 9;
+    int te = data.indexOf("\"", ts);
+    String title = data.substring(ts, te);
+   
+    int es = data.indexOf("\"extract\":\"") + 11;
+    int ee = data.indexOf("\"", es);
+    String extract = data.substring(es, ee);
+   
+    Serial.println("\n=== " + title + " ===");
+    Serial.println(extract.substring(0, 500));
+  } else {
+    Serial.println("Not found!");
+  }
+ 
+  http.end();
+  Serial.println("\nPress any key...");
+  while(!Serial.available()) yield();
+  Serial.read();
+ 
+  currentApp = "home";
+}
+
+// ============ SYSTEM INFO ============
+void sysInfo() {
+  Display::clear();
+  Display::print(0, 0, "SYSTEM INFO");
+  Display::print(0, 10, deviceName);
+  Display::print(0, 20, "Mem:" + String(ESP.getFreeHeap()));
+  Display::print(0, 30, "CPU:" + String(ESP.getCpuFreqMHz()) + "MHz");
+  if(wifiConnected) Display::print(0, 40, WiFi.localIP().toString());
+  Display::print(0, 50, "Scores: F" + String(highScoreFlappy) +
+                        " M" + String(highScoreMario) +
+                        " Fi" + String(highScoreFighter));
+  Display::show();
+ 
+  Serial.println("Device: " + deviceName);
+  Serial.println("Free: " + String(ESP.getFreeHeap()) + "b");
+  Serial.println("Flappy: " + String(highScoreFlappy));
+  Serial.println("Mario: " + String(highScoreMario));
+  Serial.println("Fighter: " + String(highScoreFighter));
+ 
+  Serial.println("\nPress key...");
+  while(!Serial.available()) yield();
+  Serial.read();
+  currentApp = "home";
+}
+
+// ========= EXAMPLE ===========
+
+void customApp() {
+  if(!wifiConnected) {
+    Serial.println("WiFi required!");
+    delay(2000);
+    currentApp = "home";
+    return;
+  }
+
+  Serial.println("\nPress key...");
+  while(!Serial.available()) yield();
+  Serial.read();
+  currentApp = "home";
+}
+
+// ============ SETUP ============
+void setup() {
+  Display::init();
+  EEPROM.begin(EEPROM_SIZE);
+  WiFi.mode(WIFI_STA);
+  randomSeed(analogRead(A0));
+ 
+  Display::clear();
+  Display::printCenter(28, "Booting...");
+  Display::show();
+  Serial.println("Booting " + String(VERSION));
+ 
+  highScoreFlappy = loadScore(0);
+  highScoreMario = loadScore(1);
+  highScoreFighter = loadScore(2);
+ 
+  String ssid, pass;
+  if(loadWiFi(ssid, pass)) {
+    Serial.println("Auto-connecting...");
+    WiFi.begin(ssid.c_str(), pass.c_str());
+   
+    int tries = 0;
+    while(WiFi.status() != WL_CONNECTED && tries < 20) {
+      delay(500);
+      Serial.print(".");
+      tries++;
+    }
+   
+    if(WiFi.status() == WL_CONNECTED) {
+      wifiConnected = true;
+      udp.begin(UDP_PORT);
+      Serial.println("\nConnected!");
+    }
+  }
+ 
+  delay(2000);
+  currentApp = "home";
+}
+
+// ============ MAIN LOOP ============
+void loop() {
+  if(currentApp == "home") {
+    showHome();
+   
+    while(!Serial.available()) yield();
+    char c = Serial.read();
+   
+    if(c >= '1' && c <= '7') {
+      menuSelection = c - '1';
+      if(c == '1') currentApp = "calculator";
+      else if(c == '2') currentApp = "wifi";
+      else if(c == '3') currentApp = "messenger";
+      else if(c == '4') currentApp = "gamezone";
+      else if(c == '5') currentApp = "browser";
+      else if(c == '6') currentApp = "sysinfo";
+      else if(c == '7') currentApp = "customappexample";
+      else if(c == '8') { Serial.println("Goodbye!"); ESP.deepSleep(0); }
+    }
+  }
+  else if(currentApp == "calculator") calculatorApp();
+  else if(currentApp == "wifi") wifiApp();
+  else if(currentApp == "messenger") messengerApp();
+  else if(currentApp == "gamezone") gameZone();
+  else if(currentApp == "browser") browserApp();
+  else if(currentApp == "sysinfo") sysInfo();
+  else if(currentApp == "customappexample") customApp();
+ 
+  yield();
+}
