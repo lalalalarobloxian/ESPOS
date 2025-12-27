@@ -1061,12 +1061,17 @@ void browserApp() {
     if(extract.length() > 0) {
       // Display in chunks of 500 characters
       int chunkSize = 500;
-      for(int i = 0; i < extract.length(); i += chunkSize) {
-        int endPos = min(i + chunkSize, extract.length());
+      for(int i = 0; i < (int)extract.length(); i += chunkSize) {
+        // FIXED: Cast extract.length() to int for comparison
+        int endPos = i + chunkSize;
+        if(endPos > (int)extract.length()) {
+          endPos = extract.length();
+        }
+        
         Serial.println(extract.substring(i, endPos));
         
         // Ask to continue if there's more text
-        if(endPos < extract.length()) {
+        if(endPos < (int)extract.length()) {
           Serial.println("\n[Press 'c' to continue, any other key to stop]");
           while(!Serial.available()) yield();
           char c = Serial.read();
