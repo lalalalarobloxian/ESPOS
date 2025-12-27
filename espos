@@ -242,7 +242,7 @@ int loadScore(int game) {
 
 // ============ HOME SCREEN ============
 void showHome() {
-  String apps[] = {"Calculator", "WiFi", "Messenger", "Games", "Browser", "SysInfo", "Exit"};
+  String apps[] = {"Calculator", "WiFi", "Messenger", "Games", "Browser", "SysInfo", "customApp" "Exit"};
  
   #ifdef USE_OLED
     Display::clear();
@@ -946,51 +946,164 @@ void browserApp() {
     return;
   }
  
-  Serial.println("BROWSER");
-  Serial.println("Enter search:");
+  Serial.println("=== BROWSER ===");
+  
+  // Ask for search term
+  String search = "";
+  bool searchConfirmed = false;
+  
+  while(!searchConfirmed) {
+    Serial.println("\nEnter search term (or 'b' for back):");
+    Serial.print("> ");
+    
+    while(!Serial.available()) yield();
+    search = Serial.readStringUntil('\n');
+    search.trim();
+    
+    if(search.length() == 0) continue;
+    
+    // Check for back command
+    if(search.equalsIgnoreCase("b") || search.equalsIgnoreCase("back")) {
+      currentApp = "home";
+      return;
+    }
+    
+    // Show confirmation
+    Serial.println("Search for: \"" + search + "\"");
+    Serial.println("Confirm? (y/n/cancel):");
+    Serial.print("> ");
+    
+    while(!Serial.available()) yield();
+    char confirm = Serial.read();
+    Serial.readStringUntil('\n'); // Clear any remaining input
+    
+    if(confirm == 'y' || confirm == 'Y') {
+      searchConfirmed = true;
+    } else if(confirm == 'c' || confirm == 'C') {
+      currentApp = "home";
+      return;
+    }
+    // If 'n', loop continues to ask again
+  }
+  
+  // Final confirmation before searching
+  Serial.println("\n--- Search Confirmation ---");
+  Serial.println("Search term: \"" + search + "\"");
+  Serial.println("Search on Wikipedia? (y/n):");
   Serial.print("> ");
- 
+  
   while(!Serial.available()) yield();
-  String search = Serial.readStringUntil('\n');
-  search.trim();
+  char finalConfirm = Serial.read();
+  Serial.readStringUntil('\n'); // Clear any remaining input
+  
+  if(finalConfirm != 'y' && finalConfirm != 'Y') {
+    Serial.println("Search cancelled.");
+    currentApp = "home";
+    return;
+  }
  
-  if(search == "b") { currentApp = "home"; return; }
- 
-  Serial.println("Searching...");
+  Serial.println("\nSearching...");
  
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
  
-  String url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + search;
-  url.replace(" ", "_");
+  // Prepare URL
+  String url = "https://en.wikipedia.org/api/rest_v1/page/summary/";
+  
+  // Clean up search term for URL
+  String urlSearch = search;
+  urlSearch.replace(" ", "_");
+  urlSearch.replace("%", "%25"); // URL encode percent sign
+  url += urlSearch;
  
+  Serial.println("URL: " + url);
+  Serial.println("Connecting...");
+  
   http.begin(client, url);
+  http.setTimeout(10000); // 10 second timeout
   int code = http.GET();
  
+  Serial.println("Response code: " + String(code));
+  
   if(code == 200) {
     String data = http.getString();
-   
-    int ts = data.indexOf("\"title\":\"") + 9;
-    int te = data.indexOf("\"", ts);
-    String title = data.substring(ts, te);
-   
-    int es = data.indexOf("\"extract\":\"") + 11;
-    int ee = data.indexOf("\"", es);
-    String extract = data.substring(es, ee);
-   
-    Serial.println("\n=== " + title + " ===");
-    Serial.println(extract.substring(0, 500));
+    
+    // Parse title
+    String title = "";
+    int ts = data.indexOf("\"title\":\"");
+    if(ts != -1) {
+      ts += 9;
+      int te = data.indexOf("\"", ts);
+      title = data.substring(ts, te);
+      title.replace("\\u", "\\x"); // Handle Unicode escapes
+    }
+    
+    // Parse extract
+    String extract = "";
+    int es = data.indexOf("\"extract\":\"");
+    if(es != -1) {
+      es += 11;
+      int ee = data.indexOf("\"", es);
+      extract = data.substring(es, ee);
+      
+      // Clean up the text
+      extract.replace("\\n", "\n"); // Convert newlines
+      extract.replace("\\\"", "\""); // Convert quotes
+      extract.replace("\\t", "  "); // Convert tabs
+    }
+    
+    // Display results
+    Serial.println("\n" + String('=', 60));
+    Serial.println("RESULT: " + title);
+    Serial.println(String('=', 60));
+    
+    if(extract.length() > 0) {
+      // Display in chunks of 500 characters
+      int chunkSize = 500;
+      for(int i = 0; i < extract.length(); i += chunkSize) {
+        int endPos = min(i + chunkSize, extract.length());
+        Serial.println(extract.substring(i, endPos));
+        
+        // Ask to continue if there's more text
+        if(endPos < extract.length()) {
+          Serial.println("\n[Press 'c' to continue, any other key to stop]");
+          while(!Serial.available()) yield();
+          char c = Serial.read();
+          Serial.readStringUntil('\n'); // Clear buffer
+          if(c != 'c' && c != 'C') break;
+        }
+      }
+    } else {
+      Serial.println("No content available.");
+    }
+    
+    Serial.println(String('=', 60));
+  } else if(code == 404) {
+    Serial.println("\nArticle not found!");
+    Serial.println("Try a different search term.");
   } else {
-    Serial.println("Not found!");
+    Serial.println("\nError: HTTP " + String(code));
+    Serial.println("Failed to retrieve data.");
   }
  
   http.end();
-  Serial.println("\nPress any key...");
+  
+  // Option to search again or go home
+  Serial.println("\n1. Search again");
+  Serial.println("2. Back to home");
+  Serial.print("> ");
+  
   while(!Serial.available()) yield();
-  Serial.read();
- 
-  currentApp = "home";
+  char choice = Serial.read();
+  Serial.readStringUntil('\n'); // Clear buffer
+  
+  if(choice == '1') {
+    // Stay in browser app to search again
+    return;
+  } else {
+    currentApp = "home";
+  }
 }
 
 // ============ SYSTEM INFO ============
