@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP12E Serial Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2d3748 0%, #1a202c 100%);
+            color: white;
+            padding: 25px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+        
+        .header p {
+            opacity: 0.8;
+            font-size: 14px;
+        }
+        
+        .controls {
+            padding: 25px;
+            background: #f7fafc;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        
+        .control-group {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .control-group label {
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        select, input, button {
+            padding: 10px 15px;
+            border: 2px solid #cbd5e0;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+        }
+        
+        select:focus, input:focus {
+            border-color: #667eea;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-disconnect {
+            background: #f56565;
+        }
+        
+        .btn-disconnect:hover {
+            background: #e53e3e;
+        }
+        
+        .btn-clear {
+            background: #ed8936;
+        }
+        
+        .btn-clear:hover {
+            background: #dd6b20;
+        }
+        
+        .status {
+            padding: 15px 25px;
+            background: #edf2f7;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+        }
+        
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #cbd5e0;
+        }
+        
+        .status-dot.connected {
+            background: #48bb78;
+            box-shadow: 0 0 10px #48bb78;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .monitor {
+            padding: 25px;
+            height: 400px;
+            overflow-y: auto;
+            background: #1a202c;
+            color: #e2e8f0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .monitor::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        .monitor::-webkit-scrollbar-track {
+            background: #2d3748;
+        }
+        
+        .monitor::-webkit-scrollbar-thumb {
+            background: #4a5568;
+            border-radius: 5px;
+        }
+        
+        .input-section {
+            padding: 20px 25px;
+            background: #f7fafc;
+            border-top: 2px solid #e2e8f0;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .input-section input {
+            flex: 1;
+        }
+        
+        .info-box {
+            margin: 20px 25px;
+            padding: 15px;
+            background: #bee3f8;
+            border-left: 4px solid #3182ce;
+            border-radius: 5px;
+        }
+        
+        .info-box h3 {
+            color: #2c5282;
+            margin-bottom: 8px;
+        }
+        
+        .info-box ul {
+            margin-left: 20px;
+            color: #2d3748;
+        }
+        
+        .info-box li {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔌 ESP12E Serial Monitor</h1>
+            <p>NodeMCU 1.0 Compatible | Web Serial API</p>
+        </div>
+        
+        <div class="info-box">
+            <h3>📌 How to Use:</h3>
+            <ul>
+                <li>Connect your ESP12E NodeMCU via USB</li>
+                <li>Click "Connect" and select your device port</li>
+                <li>Baud rate is set to 115200 (default for ESP12E)</li>
+                <li>Type commands in the input box and press Enter or click Send</li>
+            </ul>
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <button id="connectBtn">Connect</button>
+                <button id="disconnectBtn" class="btn-disconnect" disabled>Disconnect</button>
+                <label for="baudRate">Baud Rate:</label>
+                <select id="baudRate">
+                    <option value="9600">9600</option>
+                    <option value="115200" selected>115200</option>
+                    <option value="230400">230400</option>
+                </select>
+                <button id="clearBtn" class="btn-clear">Clear Monitor</button>
+            </div>
+        </div>
+        
+        <div class="status">
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Disconnected</span>
+            </div>
+            <span id="bytesReceived">Bytes: 0</span>
+        </div>
+        
+        <div class="monitor" id="monitor"></div>
+        
+        <div class="input-section">
+            <input type="text" id="sendInput" placeholder="Type command and press Enter..." disabled>
+            <button id="sendBtn" disabled>Send</button>
+        </div>
+    </div>
+
+    <script>
+        let port;
+        let reader;
+        let writer;
+        let bytesReceived = 0;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const sendInput = document.getElementById('sendInput');
+        const monitor = document.getElementById('monitor');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const bytesCounter = document.getElementById('bytesReceived');
+        const baudRate = document.getElementById('baudRate');
+
+        // Check if Web Serial API is supported
+        if (!('serial' in navigator)) {
+            monitor.innerHTML = '<span style="color: #f56565;">❌ Web Serial API not supported in this browser. Please use Chrome, Edge, or Opera.</span>';
+            connectBtn.disabled = true;
+        }
+
+        connectBtn.addEventListener('click', async () => {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: parseInt(baudRate.value) });
+
+                statusDot.classList.add('connected');
+                statusText.textContent = 'Connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                sendBtn.disabled = false;
+                sendInput.disabled = false;
+                baudRate.disabled = true;
+
+                appendToMonitor('✅ Connected to device at ' + baudRate.value + ' baud\n', '#48bb78');
+
+                readLoop();
+                setupWriter();
+            } catch (error) {
+                appendToMonitor('❌ Connection failed: ' + error.message + '\n', '#f56565');
+            }
+        });
+
+        disconnectBtn.addEventListener('click', async () => {
+            if (reader) {
+                await reader.cancel();
+            }
+            if (port) {
+                await port.close();
+            }
+            
+            statusDot.classList.remove('connected');
+            statusText.textContent = 'Disconnected';
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+            sendBtn.disabled = true;
+            sendInput.disabled = true;
+            baudRate.disabled = false;
+
+            appendToMonitor('\n⚠️ Disconnected from device\n', '#ed8936');
+        });
+
+        async function readLoop() {
+            try {
+                const decoder = new TextDecoderStream();
+                port.readable.pipeTo(decoder.writable);
+                reader = decoder.readable.getReader();
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    bytesReceived += value.length;
+                    bytesCounter.textContent = 'Bytes: ' + bytesReceived;
+                    appendToMonitor(value);
+                }
+            } catch (error) {
+                appendToMonitor('\n❌ Read error: ' + error.message + '\n', '#f56565');
+            }
+        }
+
+        async function setupWriter() {
+            const encoder = new TextEncoderStream();
+            encoder.readable.pipeTo(port.writable);
+            writer = encoder.writable.getWriter();
+        }
+
+        async function sendData(data) {
+            if (writer) {
+                await writer.write(data + '\n');
+                appendToMonitor('>> ' + data + '\n', '#4299e1');
+            }
+        }
+
+        sendBtn.addEventListener('click', () => {
+            if (sendInput.value) {
+                sendData(sendInput.value);
+                sendInput.value = '';
+            }
+        });
+
+        sendInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && sendInput.value) {
+                sendData(sendInput.value);
+                sendInput.value = '';
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            monitor.innerHTML = '';
+            bytesReceived = 0;
+            bytesCounter.textContent = 'Bytes: 0';
+        });
+
+        function appendToMonitor(text, color = '#e2e8f0') {
+            const span = document.createElement('span');
+            span.style.color = color;
+            span.textContent = text;
+            monitor.appendChild(span);
+            monitor.scrollTop = monitor.scrollHeight;
+        }
+    </script>
+</body>
+</html>
